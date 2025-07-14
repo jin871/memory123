@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ベネッセキャラクター神経衰弱 - AI対戦</title>
+    <style>
+        body { font-family: 'Arial', sans-serif; background-color: #f0f8ff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; }
+        h1 { color: #ff9800; margin-bottom: 10px; }
+        
+        /* ▼▼▼ 追加したスタイル ▼▼▼ */
+        #game-info { display: flex; justify-content: space-between; width: 450px; margin-bottom: 15px; font-size: 1.2em; font-weight: bold; }
+        #score-board { display: flex; }
+        #player-score, #ai-score { margin: 0 10px; padding: 5px 15px; border-radius: 8px; color: white; }
+        #player-score { background-color: #4a90e2; }
+        #ai-score { background-color: #e95a5a; }
+        #turn-display { padding: 5px 15px; border-radius: 8px; background-color: #f5a623; color: white; }
+        /* ▲▲▲ 追加ここまで ▲▲▲ */
+        
+        #game-board { display: grid; grid-template-columns: repeat(4, 110px); gap: 10px; perspective: 1000px; position: relative; }
+        
+        /* ▼▼▼ 追加したスタイル ▼▼▼ */
+        /* AIのターン中に操作できないようにするオーバーレイ */
+        #board-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; display: none; }
+        /* ▲▲▲ 追加ここまで ▲▲▲ */
+
+        .card { width: 110px; height: 110px; position: relative; transform-style: preserve-3d; transition: transform 0.6s; cursor: pointer; }
+        .card.is-flipped { transform: rotateY(180deg); }
+        .card.is-matched { opacity: 0.5; cursor: default; }
+        .card-face { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; border-radius: 10px; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .card-face-front { background-color: #ffffff; transform: rotateY(180deg); }
+        .card-face-front img { width: 90%; height: 90%; object-fit: contain; }
+        .card-face-back { background-color: #ff5722; color: white; font-size: 48px; }
+        #reset-button { margin-top: 20px; padding: 10px 20px; font-size: 16px; color: white; background-color: #4CAF50; border: none; border-radius: 5px; cursor: pointer; transition: background-color 0.3s; }
+        #reset-button:hover { background-color: #45a049; }
+    </style>
+</head>
+<body>
+    <h1>ベネッセキャラクター神経衰弱</h1>
+    
+    <div id="game-info">
+        <div id="score-board">
+            <div id="player-score">あなた: 0</div>
+            <div id="ai-score">AI: 0</div>
+        </div>
+        <div id="turn-display">あなたのターン</div>
+    </div>
+    <div id="game-container">
+        <div id="game-board">
+             <div id="board-overlay"></div>
+             </div>
+        <button id="reset-button">リセット</button>
+    </div>
+
+    <script>
+        const characters = [
+            { id: 1, image: 'images/nyacchi.jpg' }, { id: 2, image: 'images/hana.png' },
+            { id: 3, image: 'images/mimirin.png' }, { id: 4, image: 'images/toriippi_green.png' },
+            { id: 5, image: 'images/toriippi_red.jpg' }, { id: 6, image: 'images/korasho.jpg' }
+        ];
+
+        const gameBoard = document.getElementById('game-board');
+        const boardOverlay = document.getElementById('board-overlay');
+        const playerScoreEl = document.getElementById('player-score');
+        const aiScoreEl = document.getElementById('ai-score');
+        const turnDisplayEl = document.getElementById('turn-display');
+        const resetButton = document.getElementById('reset-button');
+
+        // ▼▼▼ 変更点：ゲーム状態を管理する変数を追加 ▼▼▼
+        let flippedCards = [];
+        let lockBoard = false;
+        let currentPlayer = 'player'; // 'player' or 'ai'
+        let scores = { player: 0, ai: 0 };
+        let aiMemory = new Map(); // AIの記憶用 { characterId -> [cardElement, cardElement] }
+        let unflippedCardElements = [];
+        // ▲▲▲ 変更ここまで ▲▲▲
+
+        function shuffle(array) { /* (変更なし) */ return array.sort(() => Math.random() - 0.5); }
+
+        function createBoard() {
+            // ▼▼▼ 変更点：初期化処理を追加 ▼▼▼
+            gameBoard.innerHTML = '';
+            gameBoard.appendChild(boardOverlay); // オーバーレイを再追加
+            
+            scores = { player: 0, ai: 0 };
+            currentPlayer = 'player';
+            aiMemory.clear();
+            unflippedCardElements = [];
+            updateScores();
+            updateTurnDisplay();
+            // ▲▲▲ 変更ここまで ▲▲▲
+            
+            const cardDeck = shuffle([...characters, ...characters]);
+
+            cardDeck.forEach((character, index) => {
+                const card = document.createElement('div');
+                card.classList.add('card');
+                card.dataset.characterId = character.id;
+                card.dataset.index = index; // カードの位置を一意に識別
+                unflippedCardElements.push(card);
+                
+                // (以下、カードの表面・裏面の生成部分は変更なし)
+                const cardFaceFront = document.createElement('div');
+                cardFaceFront.classList.add('card-face', 'card-face-front');
+                const img = document.createElement('img');
+                img.src = character.image;
+                cardFaceFront.appendChild(img);
+                const cardFaceBack = document.createElement('div');
+                cardFaceBack.classList.add('card-face', 'card-face-back');
+                cardFaceBack.textContent = '?';
+                card.appendChild(cardFaceFront);
+                card.appendChild(cardFaceBack);
+                gameBoard.appendChild(card);
+                card.addEventListener('click', handleCardClick);
+            });
+        }
+
+        function handleCardClick() {
+            // ▼▼▼ 変更点：プレイヤーのターンかチェック ▼▼▼
+            if (currentPlayer !== 'player' || lockBoard) return;
+            // ▲▲▲ 変更ここまで ▲▲▲
+            
+            flipCard(this);
+        }
+
+        function flipCard(cardElement) {
+            if (flippedCards.includes(cardElement) || cardElement.classList.contains('is-matched')) return;
+
+            cardElement.classList.add('is-flipped');
+            flippedCards.push(cardElement);
+
+            // ▼▼▼ 変更点：めくられたカードをAIが記憶 ▼▼▼
+            const charId = cardElement.dataset.characterId;
+            if (!aiMemory.has(charId)) {
+                aiMemory.set(charId, []);
+            }
+            const memoryEntry = aiMemory.get(charId);
+            if (!memoryEntry.includes(cardElement)) {
+                memoryEntry.push(cardElement);
+            }
+            // ▲▲▲ 変更ここまで ▲▲▲
+
+            if (flippedCards.length === 2) {
+                lockBoard = true;
+                checkForMatch();
+            }
+        }
+
+        function checkForMatch() {
+            const [firstCard, secondCard] = flippedCards;
+            const isMatch = firstCard.dataset.characterId === secondCard.dataset.characterId;
+
+            if (isMatch) {
+                setTimeout(disableCards, 500);
+            } else {
+                setTimeout(unflipCards, 1200);
+            }
+        }
+
+        function disableCards() {
+            const [firstCard, secondCard] = flippedCards;
+            firstCard.classList.add('is-matched');
+            secondCard.classList.add('is-matched');
+
+            // ▼▼▼ 変更点：スコア更新と連続ターン処理 ▼▼▼
+            scores[currentPlayer]++;
+            updateScores();
+
+            // めくられていないカードのリストから削除
+            unflippedCardElements = unflippedCardElements.filter(card => !card.classList.contains('is-matched'));
+
+            flippedCards = [];
+            lockBoard = false;
+
+            if (unflippedCardElements.length === 0) {
+                endGame();
+                return;
+            }
+            
+            // ペアを揃えたら、もう一度自分のターン
+            if (currentPlayer === 'ai') {
+                setTimeout(aiTurn, 1000); // AIは連続で行動
+            }
+            // ▲▲▲ 変更ここまで ▲▲▲
+        }
+
+        function unflipCards() {
+            const [firstCard, secondCard] = flippedCards;
+            firstCard.classList.remove('is-flipped');
+            secondCard.classList.remove('is-flipped');
+
+            flippedCards = [];
+            lockBoard = false;
+
+            // ▼▼▼ 変更点：ターンを交代する ▼▼▼
+            switchTurn();
+            // ▲▲▲ 変更ここまで ▲▲▲
+        }
+
+        // ▼▼▼ ここからAI関連の関数（すべて新規追加） ▼▼▼
+        function switchTurn() {
+            currentPlayer = (currentPlayer === 'player') ? 'ai' : 'player';
+            updateTurnDisplay();
+            if (currentPlayer === 'ai') {
+                boardOverlay.style.display = 'block';
+                setTimeout(aiTurn, 1000); // AIの思考時間
+            } else {
+                boardOverlay.style.display = 'none';
+            }
+        }
+        
+        function aiTurn() {
+            // 1. 記憶の中からペアを探す
+            for (const [id, cards] of aiMemory.entries()) {
+                if (cards.length === 2 && !cards[0].classList.contains('is-matched')) {
+                    // ペアが見つかった！
+                    flipCard(cards[0]);
+                    setTimeout(() => flipCard(cards[1]), 500);
+                    return;
+                }
+            }
+
+            // 2. ペアが見つからなければ、ランダムにめくる
+            const availableCards = unflippedCardElements.filter(card => !flippedCards.includes(card));
+            const card1 = availableCards[Math.floor(Math.random() * availableCards.length)];
+            flipCard(card1);
+
+            setTimeout(() => {
+                // 2枚目をめくる前に、記憶からペアを探す
+                const card1Id = card1.dataset.characterId;
+                const memoryEntry = aiMemory.get(card1Id);
+                if (memoryEntry.length === 2 && memoryEntry[1] !== card1) {
+                    const card2 = memoryEntry.find(c => c !== card1);
+                    if (!card2.classList.contains('is-matched')) {
+                        flipCard(card2);
+                        return;
+                    }
+                }
+                
+                // それでも見つからなければ、ランダムに2枚目をめくる
+                const availableCards2 = unflippedCardElements.filter(card => !flippedCards.includes(card));
+                const card2 = availableCards2[Math.floor(Math.random() * availableCards2.length)];
+                flipCard(card2);
+            }, 700);
+        }
+
+        function updateScores() {
+            playerScoreEl.textContent = `あなた: ${scores.player}`;
+            aiScoreEl.textContent = `AI: ${scores.ai}`;
+        }
+        
+        function updateTurnDisplay() {
+            turnDisplayEl.textContent = (currentPlayer === 'player') ? 'あなたのターン' : 'AIのターン';
+        }
+
+        function endGame() {
+            let message = '引き分けです！';
+            if (scores.player > scores.ai) message = 'あなたの勝ちです！おめでとう！';
+            if (scores.ai > scores.player) message = 'AIの勝ちです！';
+            setTimeout(() => alert(message), 500);
+        }
+        // ▲▲▲ AI関連の関数ここまで ▲▲▲
+
+        resetButton.addEventListener('click', createBoard);
+        createBoard();
+    </script>
+</body>
+</html>
